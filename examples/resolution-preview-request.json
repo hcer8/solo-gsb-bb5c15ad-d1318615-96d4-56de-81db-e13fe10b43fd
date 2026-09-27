@@ -1,0 +1,6 @@
+{
+  "decisions": [
+    { "conflict": 0, "winner": "A" },
+    { "conflict": 1, "winner": "B" }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "base": {
+    "mode": "ha",
+    "servers": [{ "host": "a.internal" }, { "host": "b.internal" }]
+  },
+  "patch": [
+    { "op": "replace", "path": "/mode", "value": "single" },
+    { "op": "replace", "path": "/servers/0/host", "value": "a2.internal" }
+  ],
+  "onto": {
+    "mode": "readonly",
+    "servers": [{ "host": "b.internal" }]
+  }
+}

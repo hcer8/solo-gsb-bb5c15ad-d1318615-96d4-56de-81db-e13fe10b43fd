@@ -1,0 +1,23 @@
+{
+  "base": {
+    "app": "payment-service",
+    "replicas": 2,
+    "servers": [
+      { "host": "a.internal", "port": 8080 },
+      { "host": "b.internal", "port": 8080 }
+    ],
+    "features": { "cache": true, "tracing": false },
+    "tags": ["stable"]
+  },
+  "patchA": [
+    { "op": "replace", "path": "/replicas", "value": 3 },
+    { "op": "add", "path": "/servers/1", "value": { "host": "a2.internal", "port": 8080 } },
+    { "op": "replace", "path": "/features/tracing", "value": true }
+  ],
+  "patchB": [
+    { "op": "remove", "path": "/servers/0" },
+    { "op": "add", "path": "/servers/1", "value": { "host": "b2.internal", "port": 9090 } },
+    { "op": "add", "path": "/features/retries", "value": 3 },
+    { "op": "replace", "path": "/features/tracing", "value": true }
+  ]
+}

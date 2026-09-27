@@ -1,0 +1,18 @@
+{
+  "name": "config-merge-rehearsal-api",
+  "version": "1.0.0",
+  "description": "Dry-run rehearsal API for concurrent config changes: merges two RFC 6902 patches (add/remove/replace) against a base JSON document with deterministic conflict detection.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0"
+  }
+}

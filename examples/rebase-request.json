@@ -1,0 +1,25 @@
+{
+  "base": {
+    "app": "payment-service",
+    "replicas": 2,
+    "servers": [
+      { "host": "a.internal", "port": 8080 },
+      { "host": "b.internal", "port": 8080 }
+    ],
+    "features": { "cache": true, "tracing": false }
+  },
+  "patch": [
+    { "op": "replace", "path": "/replicas", "value": 3 },
+    { "op": "add", "path": "/features/retries", "value": 3 }
+  ],
+  "onto": {
+    "app": "payment-service",
+    "replicas": 2,
+    "servers": [
+      { "host": "b.internal", "port": 8080 },
+      { "host": "c.internal", "port": 9090 }
+    ],
+    "features": { "cache": true, "tracing": true },
+    "region": "eu-west"
+  }
+}

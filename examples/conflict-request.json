@@ -1,0 +1,14 @@
+{
+  "base": {
+    "database": { "host": "db1.internal", "port": 5432 },
+    "mode": "ha"
+  },
+  "patchA": [
+    { "op": "remove", "path": "/database" },
+    { "op": "replace", "path": "/mode", "value": "single" }
+  ],
+  "patchB": [
+    { "op": "replace", "path": "/database/host", "value": "db2.internal" },
+    { "op": "replace", "path": "/mode", "value": "readonly" }
+  ]
+}
