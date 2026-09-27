@@ -1,0 +1,8 @@
+{
+  "rules": [
+    { "prefix": "/replicas", "owner": "A" },
+    { "prefix": "/features", "owner": "A" },
+    { "prefix": "/servers", "owner": "B" },
+    { "prefix": "/servers/0/host", "owner": "A" }
+  ]
+}

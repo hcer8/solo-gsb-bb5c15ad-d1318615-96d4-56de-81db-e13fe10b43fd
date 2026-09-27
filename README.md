@@ -40,6 +40,7 @@ npm ci && npm start
 | 合并接口 | `POST http://localhost:3000/api/v1/merges` |
 | 变基接口 | `POST http://localhost:3000/api/v1/rebases` |
 | 约束预检接口 | `POST http://localhost:3000/api/v1/merges/:id/constraint-preview` |
+| 归属预检接口 | `POST http://localhost:3000/api/v1/merges/:id/ownership-preview` |
 
 ## 配置项（环境变量）
 
@@ -65,6 +66,7 @@ npm ci && npm start
 | `GET` | `/api/v1/merges/:id/round-trip-plan` | 为干净合并记录生成确定性 RFC 6902 forward（base→merged）/ rollback（merged→base）补丁，服务端重放校验后返回 |
 | `GET` | `/api/v1/merges/:id/provenance` | 干净合并记录的叶子级来源追踪：`merged` 每个叶子路径标注 `base` / `A` / `B` / `both` 及贡献操作的原始序号 |
 | `POST` | `/api/v1/merges/:id/constraint-preview` | 对干净合并记录提交一组条件规则（`when` 指针值与 `equals` 深度相等时 `require` 指针必须存在），在基准 / A 单独 / B 单独 / 合并结果四种状态上评估并分类合并结果中的违规（不修改记录） |
+| `POST` | `/api/v1/merges/:id/ownership-preview` | 对任意已保存记录提交一组路径归属规则（唯一 RFC 6901 前缀 → 归属方 A/B），逐条检查原始 patchA/patchB 操作的归属并返回可发布布尔值与违规项（不修改记录） |
 | `POST` | `/api/v1/rebases` | 变基预演：把基于 `base` 的 `patch` 迁移到新版本 `onto`，返回 `merged` 与相对 `onto` 的 `rebasedPatch`（服务端重放校验），冲突时不返回可执行补丁 |
 | `DELETE` | `/api/v1/merges/:id` | 删除单条预演（`204`） |
 
@@ -525,6 +527,111 @@ curl -s -X POST "http://localhost:3000/api/v1/merges/$id/constraint-preview" \
 #    双侧同时违规 / combination-only 与全状态通过
 ```
 
+### `POST /api/v1/merges/:id/ownership-preview`（路径归属预检）
+
+对一条**已保存**的预演记录（干净或冲突均可），提交一组**路径归属规则**：每条规则把一个
+**唯一的 RFC 6901 前缀**指派给归属方（`A` 或 `B`），表示该前缀下的路径归这一方所有。
+服务**逐条检查原始 `patchA` / `patchB` 操作**是否越权，返回**可发布布尔值**与违规清单。
+**预检不会修改已保存的记录**，同一记录同一请求重复提交返回**逐字节一致**的结果。
+
+请求体（也见 `examples/ownership-preview-request.json`，或 `GET /api/v1/example`）：
+
+```json
+{
+  "rules": [
+    { "prefix": "/replicas", "owner": "A" },
+    { "prefix": "/features", "owner": "A" },
+    { "prefix": "/servers", "owner": "B" },
+    { "prefix": "/servers/0/host", "owner": "A" }
+  ]
+}
+```
+
+- `prefix`：RFC 6901 JSON Pointer（`""` 表示文档根，`~0` / `~1` 转义），组内**唯一**
+  （按规范化形式判重）；`owner`：`"A"` 或 `"B"`。两个字段均必填，不识别多余字段；
+  `rules` 按请求顺序参与评估，空数组合法（此时任何操作都因未被覆盖而违规）。
+
+#### 归属判定
+
+对每一条**原始操作**（保持其在原补丁中的序号，即使后来被补丁内 last-wins 覆盖也照样检查）：
+
+1. **归属检查**：取操作路径在**基准文档坐标**下的**最长匹配前缀规则**作为归属方
+   （更具体的规则覆盖更宽的规则；`""` 规则兜底所有路径）：
+   - **数组 `add` 的插入位置按父数组归属**——插入不占有某个下标元素，匹配父数组路径，
+     元素级规则（如 `/servers/1`）不捕获插入；
+   - 对象新成员的 `add` 按成员路径本身匹配；
+   - 没有任何规则覆盖该路径 → 违规（`uncovered-path`，命中规则为 `null`）；
+   - 归属方不是操作所在方 → 违规（`owned-by-other`）。
+2. **后代守卫**（防父节点写入绕过保护）：当操作是 `replace` / `remove` 或**覆盖已有对象
+   成员的 `add`**（RFC 6902 语义等同 `replace`）时，若目标路径**之下**存在归属另一方的
+   后代规则，每条这样的规则产生一个违规（`descendant-owned-by-other`）——即使该操作
+   自身的归属检查通过，也不允许整体改写夹带他方领土的子树。数组插入不触发此检查。
+
+#### 响应结构（`200`）
+
+以 `examples/merge-request.json` 创建记录、再提交
+`examples/ownership-preview-request.json` 为例：
+
+```jsonc
+{
+  "id": "...",
+  "createdAt": "...",
+  "status": "clean",
+  "rules": [ /* 规范化后的规则，按请求顺序 */ ],
+  "publishable": false,
+  "violations": [
+    { "side": "A", "index": 1, "op": "add", "path": "/servers/1",
+      "rule": { "prefix": "/servers", "owner": "B" }, "reason": "owned-by-other" },
+    { "side": "B", "index": 0, "op": "remove", "path": "/servers/0",
+      "rule": { "prefix": "/servers/0/host", "owner": "A" },
+      "reason": "descendant-owned-by-other" },
+    { "side": "B", "index": 2, "op": "add", "path": "/features/retries",
+      "rule": { "prefix": "/features", "owner": "A" }, "reason": "owned-by-other" },
+    { "side": "B", "index": 3, "op": "replace", "path": "/features/tracing",
+      "rule": { "prefix": "/features", "owner": "A" }, "reason": "owned-by-other" }
+  ],
+  "summary": {
+    "total": 4,
+    "bySide": { "A": 1, "B": 3 },
+    "byReason": { "uncovered-path": 0, "owned-by-other": 3,
+                  "descendant-owned-by-other": 1 }
+  }
+}
+```
+
+- `publishable`：无违规时为 `true`。
+- `violations` 按**处理顺序**排列（先 patchA 后 patchB、各自按原始序号；同一操作先归属
+  检查后后代守卫），每项给出**方别**（`side`）、**原始序号**（`index`）、`op`、**路径**
+  （`path`，按请求原样报告）、**命中规则**（`rule`，未覆盖时为 `null`）与**原因**
+  （`reason`：`uncovered-path` / `owned-by-other` / `descendant-owned-by-other`）。
+- `summary` 按方别与原因统计违规数（三类原因的键始终存在）。
+
+#### 状态码与确定性
+
+- **任意状态的记录 → `200`**：归属检查只读取保存的 `patchA` / `patchB`，不依赖合并结果，
+  冲突记录同样可检。
+- **规则无效 → `422`**：`{ statusCode, error, code: "INVALID_RULES", message, invalid: [...] }`；
+  `invalid` 按请求顺序列出每条问题规则的 `index`、`prefix`（非字符串时为 `null`）与
+  `issues`（非对象、缺字段、`owner` 非 A/B、指针非法、前缀重复、多余字段等）。
+- **记录不存在 → `404`**（先于规则校验）；请求体缺 `rules` 等结构问题 → `400`。
+- 预检是已保存记录与请求规则的**纯函数**：不修改记录，同一请求重复提交返回逐字节一致的结果。
+
+完整流程示例：
+
+```bash
+# 1) 用干净合并示例创建记录，记下 id
+id=$(curl -s -X POST http://localhost:3000/api/v1/merges \
+  -H 'Content-Type: application/json' \
+  -d @examples/merge-request.json | jq -r .id)
+
+# 2) 提交归属规则预检
+curl -s -X POST "http://localhost:3000/api/v1/merges/$id/ownership-preview" \
+  -H 'Content-Type: application/json' \
+  -d @examples/ownership-preview-request.json | jq
+# => 200；publishable: false —— A 向 B 的 /servers 插入、B 写 A 的 /features，
+#    且 B 删除 /servers/0 会夹带删除 A 拥有的 /servers/0/host
+```
+
 ### `POST /api/v1/rebases`（变基预演）
 
 把一份**基于旧版本 `base` 的待发布补丁**迁移到上游新版本 `onto` 上。服务先把 `base` → `onto`
@@ -712,6 +819,9 @@ curl -s http://localhost:3000/api/v1/merges/<id>/provenance | jq       # 叶子�
 curl -s -X POST http://localhost:3000/api/v1/merges/<id>/constraint-preview \
   -H 'Content-Type: application/json' \
   -d @examples/constraint-preview-request.json | jq                    # 条件约束预检（四状态评估 + 违规归因）
+curl -s -X POST http://localhost:3000/api/v1/merges/<id>/ownership-preview \
+  -H 'Content-Type: application/json' \
+  -d @examples/ownership-preview-request.json | jq                     # 路径归属预检（可发布布尔值 + 违规项）
 curl -s -X POST http://localhost:3000/api/v1/rebases \
   -H 'Content-Type: application/json' \
   -d @examples/rebase-request.json | jq                                # 变基预演（merged + rebasedPatch）
@@ -785,7 +895,12 @@ rebasedPatch 重放校验、同缝隙上游优先定序、冲突 `409`（路径/
 `400`/`422` 输入校验、空补丁与根替换边界、无状态与重复请求逐字节一致，以及条件约束预检的
 四状态评估（基准 / A 单独 / B 单独 / 合并结果，单侧沿用基准坐标语义与数组重定位）、
 五类违规归因（既存 / A 引入 / B 引入 / 双侧同时 / 仅组合后）、指针存在性与 `null` 值区分、
-无效规则 `422`（逐条列出问题）、冲突记录 `409`、未知记录 `404`、记录不变与重复请求逐字节一致等。
+无效规则 `422`（逐条列出问题）、冲突记录 `409`、未知记录 `404`、记录不变与重复请求逐字节一致，
+以及路径归属预检的最长前缀归属（更具体规则优先、`""` 兜底）、数组插入按父数组归属
+（元素级规则不捕获插入）、对象新成员按成员路径匹配、后代守卫（`replace` / `remove` /
+覆盖已有对象成员的 `add` 不得夹带他方后代规则）、未覆盖路径违规、原始操作逐条检查
+（含补丁内被覆盖操作）、冲突记录可检、无效规则 `422`、未知记录 `404`、
+记录不变与重复请求逐字节一致等。
 
 ## 项目结构
 
@@ -800,6 +915,7 @@ rebasedPatch 重放校验、同缝隙上游优先定序、冲突 `409`（路径/
 │   ├── roundtrip.js           # 往返补丁：字典序对象 diff + 数组 LCS（删除降序/插入升序）→ RFC 6902 forward/rollback，服务端重放校验
 │   ├── provenance.js          # 叶子来源追踪：在带来源标签的镜像文档上重放基准坐标合并，归属 merged 每个叶子（base/A/B/both）
 │   ├── constraint.js          # 条件约束预检：规则校验（422）→ 基准/A 单独/B 单独/合并结果四状态评估 → 合并违规归因（既存/A/B/组合）
+│   ├── ownership.js           # 路径归属预检：前缀规则校验（422）→ 原始操作逐条归属检查（最长前缀、数组插入按父数组、后代守卫）→ 可发布判定
 │   ├── rebase.js              # 变基：base→onto 转基准坐标操作（数组 LCS 对齐、缝隙插入）→ 与客户端补丁合并 → 生成并重放校验 onto 相对补丁
 │   ├── store.js               # 内存存储（FIFO 淘汰）
 │   └── example.js             # 内置示例请求
@@ -829,6 +945,12 @@ rebasedPatch 重放校验、同缝隙上游优先定序、冲突 `409`（路径/
   基准元素身份重定位），合并结果中的违规按既存 / A 引入 / B 引入 / 仅组合后归因，
   两侧均单独违规时同时标出 A 与 B；预检不修改记录，无效规则返回 `422` 并逐条列出问题，
   冲突记录返回 `409`，仅干净合并记录可用。
+- 路径归属预检（`POST /api/v1/merges/:id/ownership-preview`）把每条「唯一 RFC 6901 前缀
+  ⇒ 归属方 A/B」的规则当作路径领土表，逐条检查原始 `patchA` / `patchB` 操作：按基准坐标
+  路径的最长前缀规则定归属（数组插入按父数组归属），未被任何规则覆盖或归属他方即违规；
+  `replace` / `remove` / 覆盖已有对象成员的 `add` 若夹带归属他方的后代规则同样违规
+  （防父节点写入绕过保护）。返回 `publishable` 布尔值与违规项（方别、原始序号、路径、
+  命中规则、原因）；预检不修改记录，干净与冲突记录均可检，无效规则返回 `422`。
 - 变基（`POST /api/v1/rebases`）是无状态预演：不写内存存储、不返回记录 `id`；`upstream`
   为 `base`→`onto` 的基准坐标操作（数组合并按缝隙寻址，不能直接当顺序补丁执行），
   `rebasedPatch` 才是相对 `onto` 的可执行 RFC 6902 补丁（服务端已重放校验等于 `merged`）；

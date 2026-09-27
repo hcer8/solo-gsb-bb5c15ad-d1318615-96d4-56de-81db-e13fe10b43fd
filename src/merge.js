@@ -174,7 +174,14 @@ function resolveTarget(base, segments, op, ctx) {
 
 const SUPPORTED_OPS = new Set(['add', 'remove', 'replace']);
 
-function normalizePatch(base, patch, side) {
+/**
+ * Normalize one patch against the base document, one normalized operation
+ * per ORIGINAL operation (indices preserved): paths are resolved to
+ * canonical base-coordinate segments, add-on-existing-object-member becomes
+ * a replace, and array insertions are flagged (`arrayInsert`). Exported for
+ * the ownership preview, which inspects every original operation.
+ */
+export function normalizePatch(base, patch, side) {
   return patch.map((raw, index) => {
     const ctx = { side, index };
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {

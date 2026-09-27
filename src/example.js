@@ -144,3 +144,20 @@ export const EXAMPLE_CONSTRAINT_PREVIEW_REQUEST = {
     },
   ],
 };
+
+/**
+ * Canned ownership-preview payload, mirrored in
+ * examples/ownership-preview-request.json. Evaluated against a record
+ * created from EXAMPLE_REQUEST it exercises both foreign-territory writes
+ * and the descendant guard: A inserts into B-owned /servers, B writes under
+ * A-owned /features, and B's removal of /servers/0 would clobber the
+ * A-owned descendant rule /servers/0/host.
+ */
+export const EXAMPLE_OWNERSHIP_PREVIEW_REQUEST = {
+  rules: [
+    { prefix: '/replicas', owner: 'A' },
+    { prefix: '/features', owner: 'A' },
+    { prefix: '/servers', owner: 'B' },
+    { prefix: '/servers/0/host', owner: 'A' },
+  ],
+};
