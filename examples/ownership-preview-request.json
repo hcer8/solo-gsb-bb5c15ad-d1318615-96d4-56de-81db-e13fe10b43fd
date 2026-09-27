@@ -1,0 +1,9 @@
+{
+  "rules": [
+    { "prefix": "/app", "owner": "A" },
+    { "prefix": "/servers", "owner": "B" },
+    { "prefix": "/servers/0/host", "owner": "A" },
+    { "prefix": "/features", "owner": "A" },
+    { "prefix": "/features/tracing", "owner": "B" }
+  ]
+}

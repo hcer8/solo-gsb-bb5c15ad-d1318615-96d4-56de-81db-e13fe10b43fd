@@ -7,6 +7,11 @@ import { buildRoundTripPlan } from './roundtrip.js';
 import { computeProvenance } from './provenance.js';
 import { rebasePatch } from './rebase.js';
 import { previewConstraints, validateRules, ConstraintError } from './constraint.js';
+import {
+  previewOwnership,
+  validateOwnershipRules,
+  OwnershipError,
+} from './ownership.js';
 import { MergeStore } from './store.js';
 import {
   EXAMPLE_REQUEST,
@@ -14,6 +19,7 @@ import {
   EXAMPLE_REBASE_REQUEST,
   EXAMPLE_REBASE_CONFLICT_REQUEST,
   EXAMPLE_CONSTRAINT_PREVIEW_REQUEST,
+  EXAMPLE_OWNERSHIP_PREVIEW_REQUEST,
 } from './example.js';
 
 export const VERSION = '1.0.0';
@@ -72,6 +78,17 @@ const resolutionBodySchema = {
 };
 
 const constraintBodySchema = {
+  type: 'object',
+  required: ['rules'],
+  additionalProperties: false,
+  properties: {
+    // Per-rule shape is validated in the handler so that invalid rules are
+    // reported as 422 (INVALID_RULES) with per-rule details, not as 400.
+    rules: { type: 'array' },
+  },
+};
+
+const ownershipBodySchema = {
   type: 'object',
   required: ['rules'],
   additionalProperties: false,
@@ -150,6 +167,8 @@ export function buildApp(options = {}) {
         'per-leaf source attribution (base / A / B / both) of a clean merge at final JSON Pointers, with contributing operation indices',
       'POST /api/v1/merges/:id/constraint-preview':
         'evaluate conditional rules (when <pointer> deep-equals <value>, another <pointer> must exist) on base / A-only / B-only / merged of a clean record and classify merged violations (preexisting / introduced-by-A / introduced-by-B / combination-only), without modifying it',
+      'POST /api/v1/merges/:id/ownership-preview':
+        'check the saved patchA/patchB operations against path-ownership rules (unique RFC 6901 prefix -> owner A/B): longest-prefix attribution in base coordinates, array inserts attributed to the parent array, other-side descendant rules protected from replace/remove; returns a publishable verdict without modifying the record',
       'POST /api/v1/rebases':
         'rebase { base, patch, onto }: merge the client patch with the base->onto delta and return merged plus an onto-relative rebasedPatch (replayed server-side), or structured conflicts',
       'DELETE /api/v1/merges/:id': 'delete one rehearsal',
@@ -167,6 +186,10 @@ export function buildApp(options = {}) {
       'POST the body below to /api/v1/merges/:id/constraint-preview ' +
       '(use the id of a clean merge record, e.g. one created from mergeRequest)',
     constraintPreviewRequest: EXAMPLE_CONSTRAINT_PREVIEW_REQUEST,
+    ownershipPreviewDescription:
+      'POST the body below to /api/v1/merges/:id/ownership-preview ' +
+      '(works with any stored record, e.g. one created from mergeRequest)',
+    ownershipPreviewRequest: EXAMPLE_OWNERSHIP_PREVIEW_REQUEST,
   }));
 
   app.post('/api/v1/merges', { schema: { body: mergeBodySchema } }, async (req, reply) => {
@@ -401,6 +424,46 @@ export function buildApp(options = {}) {
       // states are computed with the same base-coordinate merge semantics
       // as the stored merge.
       const preview = previewConstraints(record, rules);
+      return {
+        id: record.id,
+        createdAt: record.createdAt,
+        status: record.status,
+        ...preview,
+      };
+    },
+  );
+
+  app.post(
+    '/api/v1/merges/:id/ownership-preview',
+    { schema: { body: ownershipBodySchema } },
+    async (req, reply) => {
+      const record = store.get(req.params.id);
+      if (!record) {
+        return reply.code(404).send({
+          statusCode: 404,
+          error: 'Not Found',
+          message: `no rehearsal stored with id ${req.params.id}`,
+        });
+      }
+      let rules;
+      try {
+        rules = validateOwnershipRules(req.body.rules);
+      } catch (err) {
+        if (err instanceof OwnershipError) {
+          return reply.code(422).send({
+            statusCode: 422,
+            error: 'Unprocessable Entity',
+            code: err.code,
+            message: err.message,
+            ...err.details,
+          });
+        }
+        throw err;
+      }
+      // Pure preview: the stored record is never modified. Any record status
+      // works — the check runs on the saved base/patchA/patchB alone and
+      // never consults the merged document.
+      const preview = previewOwnership(record, rules);
       return {
         id: record.id,
         createdAt: record.createdAt,

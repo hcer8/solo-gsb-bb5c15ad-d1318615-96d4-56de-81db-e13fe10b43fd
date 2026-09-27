@@ -144,3 +144,23 @@ export const EXAMPLE_CONSTRAINT_PREVIEW_REQUEST = {
     },
   ],
 };
+
+/**
+ * Canned ownership-preview payload, mirrored in
+ * examples/ownership-preview-request.json. Evaluated against a record
+ * created from EXAMPLE_REQUEST it exercises every violation reason:
+ * uncovered-path (A replaces /replicas, which no rule covers),
+ * owned-by-other (A inserts into B's /servers array and touches B's
+ * /features/tracing; B adds /features/retries under A's /features) and
+ * descendant-owned-by-other (B removes /servers/0, under which A owns the
+ * nested /servers/0/host rule).
+ */
+export const EXAMPLE_OWNERSHIP_PREVIEW_REQUEST = {
+  rules: [
+    { prefix: '/app', owner: 'A' },
+    { prefix: '/servers', owner: 'B' },
+    { prefix: '/servers/0/host', owner: 'A' },
+    { prefix: '/features', owner: 'A' },
+    { prefix: '/features/tracing', owner: 'B' },
+  ],
+};
